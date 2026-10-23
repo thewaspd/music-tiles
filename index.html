@@ -567,6 +567,7 @@ function audioPause(){fade(0,25);setTimeout(()=>{if(G.waiting||!G.playing||pause
 
 /* ---------- MIDI: Mac bridge -> phone over WebRTC (PeerJS for pairing only) ---------- */
 const PEER_PREFIX='nocturnekeys-';
+const NKLOG=window.__nkLog=[];const nklog=(...a)=>{NKLOG.push(Math.round(performance.now())+' '+a.join(' '));if(NKLOG.length>80)NKLOG.shift()};
 const MD={peer:null,conn:null,ok:false,rtt:40,q:[],timer:null,pingT:null,flash:0};
 function midiStat(txt,cls){$('#mStat').innerHTML=`<i class="dot ${cls||''}"></i>`+txt}
 function connectMidi(){
@@ -580,14 +581,15 @@ function connectMidi(){
   const go=()=>{
     const conn=MD.peer.connect(PEER_PREFIX+code,{reliable:true});MD.conn=conn;
     const fail=setTimeout(()=>{if(!MD.ok&&MD.conn===conn){midiStat('No answer. Is the bridge open on the Mac?','bad');retryMidi()}},9000);
-    conn.on('open',()=>{clearTimeout(fail);MD.ok=true;midiReady();clearInterval(MD.pingT);MD.pingT=setInterval(()=>{try{conn.send({t:'ping',x:performance.now()})}catch(e){}},2000);conn.send({t:'ping',x:performance.now()})});
+    conn.on('open',()=>{nklog('phone conn open',conn.peer);clearTimeout(fail);MD.ok=true;midiReady();clearInterval(MD.pingT);MD.pingT=setInterval(()=>{try{conn.send({t:'ping',x:performance.now()})}catch(e){}},2000);conn.send({t:'ping',x:performance.now()})});
     conn.on('data',d=>{
+      nklog('phone got',JSON.stringify(d));
       if(!d||typeof d!=='object')return;
       if(d.t==='on'){MD.flash=performance.now();if(!S.mcal)midiCalibrate(d.n);else if(!G.on){midiStat(`Heard ${nn(d.n-(S.mshift|0)).replace('♯','#')} · ${Math.round(MD.rtt/2)} ms`,'ok')}else MD.q.push(d.n)}
       else if(d.t==='pong'){const r=performance.now()-d.x;MD.rtt=MD.rtt*.7+r*.3}
       else if(d.t==='bye'){MD.ok=false;midiStat('The Mac closed the bridge','bad')}
     });
-    conn.on('close',()=>{if(MD.conn===conn){MD.ok=false;midiStat('Disconnected. Reconnecting…','wait');retryMidi()}});
+    conn.on('close',()=>{nklog('phone conn close');if(MD.conn===conn){MD.ok=false;midiStat('Disconnected. Reconnecting…','wait');retryMidi()}});
     conn.on('error',()=>{});
   };
   if(MD.peer&&!MD.peer.destroyed&&MD.peer.open)go();
@@ -648,9 +650,10 @@ function startBridgePeer(newCode){
   bset('bNet','Connecting to the pairing service…','wait');
   peer.on('open',()=>{saved.bridgeCode=code;persist();[...$('#bCode').children].forEach((el,i)=>el.textContent=code[i]);bset('bNet','Online · code '+code,'ok')});
   peer.on('connection',conn=>{
-    conn.on('open',()=>{BR.conns.add(conn);bset('bPhone','Phone connected','ok')});
+    nklog('bridge incoming',conn.peer);
+    conn.on('open',()=>{nklog('bridge conn open',conn.peer);BR.conns.add(conn);bset('bPhone','Phone connected','ok')});
     conn.on('data',d=>{if(d&&d.t==='ping')try{conn.send({t:'pong',x:d.x})}catch(e){}});
-    conn.on('close',()=>{BR.conns.delete(conn);if(!BR.conns.size)bset('bPhone','Waiting for your phone','')});
+    conn.on('close',()=>{nklog('bridge conn close',conn.peer);BR.conns.delete(conn);if(!BR.conns.size)bset('bPhone','Waiting for your phone','')});
   });
   peer.on('error',e=>{
     if(e&&e.type==='unavailable-id'){startBridgePeer(true);return}       // code taken: pick another
@@ -660,7 +663,7 @@ function startBridgePeer(newCode){
 }
 function onBridgeMidi(ev){
   const [st,n,v]=ev.data,cmd=st&0xf0;
-  if(cmd===0x90&&v>0){for(const c of BR.conns)try{c.send({t:'on',n,v})}catch(e){}
+  if(cmd===0x90&&v>0){for(const c of BR.conns)try{c.send({t:'on',n,v});nklog('bridge sent',n,'to',c.peer,'open='+c.open)}catch(e){nklog('send err',e&&e.message)}
     $('#bLast').innerHTML=`Last key: <b>${nn(n).replace('♯','#')}</b> · sent to ${BR.conns.size} phone${BR.conns.size===1?'':'s'}`}
   else if(cmd===0x80||(cmd===0x90&&v===0)){for(const c of BR.conns)try{c.send({t:'off',n})}catch(e){}}
 }
