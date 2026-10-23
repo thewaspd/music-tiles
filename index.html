@@ -245,7 +245,7 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
     <div>
       <div class="lbl">Mode</div>
       <div class="modes">
-        <button class="mode" data-mode="learn"><b><svg viewBox="0 0 24 24"><path d="M4 19V6a2 2 0 0 1 2-2h12v15H6a2 2 0 0 0-2 2"/><path d="M8 8h6"/></svg>Learn</b><span>Waits for you. The music follows your speed.</span></button>
+        <button class="mode" data-mode="learn"><b><svg viewBox="0 0 24 24"><path d="M4 19V6a2 2 0 0 1 2-2h12v15H6a2 2 0 0 0-2 2"/><path d="M8 8h6"/></svg>Learn</b><span>Only your part plays. Waits for each note.</span></button>
         <button class="mode" data-mode="perform"><b><svg viewBox="0 0 24 24"><path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.4 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/></svg>Perform</b><span>Real tempo. Scored on accuracy &amp; timing.</span></button>
       </div>
     </div>
@@ -443,8 +443,9 @@ function initAudio(){
   AC.createMediaElementSource(elB).connect(gB);AC.createMediaElementSource(elP).connect(gP);
   applyVol();
 }
-const pianoVol=()=>(S.out==='speaker'&&G&&G.on&&G.mode==='perform')?0:S.volP;
-function applyVol(){if(!AC)return;const t=AC.currentTime;gB.gain.setTargetAtTime(S.volB,t,.03);gP.gain.setTargetAtTime(pianoVol(),t,.03)}
+const pianoVol=()=>(S.out==='speaker'&&G&&G.on&&G.mode==='perform')?0:(G&&G.on&&G.mode==='learn')?Math.max(S.volP,.7):S.volP;
+const backVol=()=>(G&&G.on&&G.mode==='learn')?0:S.volB;
+function applyVol(){if(!AC)return;const t=AC.currentTime;gB.gain.setTargetAtTime(backVol(),t,.03);gP.gain.setTargetAtTime(pianoVol(),t,.03)}
 
 async function initMic(){
   initAudio();
@@ -695,8 +696,9 @@ function drum(c,dst,n,t,v){
   const hat=[42,44,46,49,51,52,53,55,57,59].includes(n),len=hat?(n===46||n>=49?.35:.06):.18;
   f.type=hat?'highpass':'bandpass';f.frequency.value=hat?7000:1800;g.gain.setValueAtTime(v*(hat?.25:.6),t);g.gain.exponentialRampToValueAtTime(.001,t+len);s.start(t,Math.random()*.5);s.stop(t+len+.02);s.onended=()=>{try{g.disconnect()}catch(e){}};
 }
-async function renderTracks(song,ids,t0,t1){
-  const SR=22050,dur=t1-t0+1.5,len=Math.ceil(dur*SR),c=new OfflineAudioContext(2,len,SR);NOISE=null;
+function silentURL(d){const C=window.OfflineAudioContext||window.webkitOfflineAudioContext,SR=8000;return wavURL({numberOfChannels:1,length:Math.ceil((d+1.5)*SR),sampleRate:SR,getChannelData:()=>new Float32Array(Math.ceil((d+1.5)*SR))})}
+async function renderTracks(song,ids,t0,t1,blocks){
+  const C=window.OfflineAudioContext||window.webkitOfflineAudioContext,SR=32000,dur=t1-t0+1.5,len=Math.ceil(dur*SR),c=new C(2,len,SR);NOISE=null;
   const comp=c.createDynamicsCompressor();comp.connect(c.destination);
   const ev=[];
   for(const i of ids){const tr=song.tracks[i],k=fam(tr),bus=c.createGain();bus.gain.value=k==='drums'?.8:1;bus.connect(comp);
@@ -707,9 +709,10 @@ async function renderTracks(song,ids,t0,t1){
   const sched=from=>{const to=from+BLK;while(i<ev.length&&ev[i].t<to){const e=ev[i++],v=e.n.v/127;
       if(e.tr.drums)drum(c,e.bus,e.n.n,e.t,v);else synthNote(c,e.bus,440*Math.pow(2,(e.n.n-69)/12),e.t,Math.min(e.n.d,t1-e.n.t+.3),v,e.k)}};
   sched(0);
-  if(c.suspend)for(let t=BLK;t<dur;t+=BLK){const tt=t;c.suspend(tt-.05>0?Math.round((tt-.05)*SR/128)*128/SR:0).then(()=>{sched(tt);c.resume()})}
+  if(blocks&&c.suspend)for(let t=BLK;t<dur;t+=BLK){const tt=t;c.suspend(tt-.05>0?Math.round((tt-.05)*SR/128)*128/SR:0).then(()=>{sched(tt);c.resume()})}
   else{while(i<ev.length)sched(ev[i].t)}
-  return wavURL(await c.startRendering());
+  const out=await new Promise((res,rej)=>{const p=c.startRendering(res);if(p&&p.then)p.then(res,rej);c.oncomplete=e=>res(e.renderedBuffer)});
+  return wavURL(out);
 }
 function wavURL(b){
   const ch=b.numberOfChannels,n=b.length,buf=new ArrayBuffer(44+n*ch*2),v=new DataView(buf),w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
@@ -751,17 +754,22 @@ async function useSheet(){
   btn.disabled=false;btn.textContent='Use this';
 }
 async function applySong(){
-  const s=SONG.song,t0=SONG.t0,t1=SONG.t1,solo=s.tracks[SONG.solo];
-  const pick=solo.notes.filter(n=>n.t>=t0-.01&&n.t<t1);
+  const s=SONG.song,t1=SONG.t1,solo=s.tracks[SONG.solo];
+  let pick=solo.notes.filter(n=>n.t>=SONG.t0-.01&&n.t<t1);
+  if(!pick.length)throw new Error('the selected track has no notes between '+fmtT(SONG.t0)+' and '+fmtT(t1));
+  // skip silence: start 1.5 s before your part's first note in the section
+  const t0=Math.max(SONG.t0,Math.min(...pick.map(n=>n.t))-1.5);
   const list=pick.map(n=>[+(n.t-t0+.6).toFixed(3),+Math.min(n.d,4).toFixed(3),n.n,0]);
   // melody = top note of each chord
   list.sort((a,b)=>a[0]-b[0]||b[2]-a[2]);let last=-1;for(const a of list){if(a[0]-last>.05){a[3]=1;last=a[0]}}
   const bIds=s.tracks.map((_,i)=>i).filter(i=>i!==SONG.solo&&!SONG.off.has(i));
   const pre=.6; // lead-in so the first note isn't at 0
-  const [bg,pn]=await Promise.all([renderTracks(s,bIds,t0-pre,t1),renderTracks(s,[SONG.solo],t0-pre,t1)]);
+  setNotes(list);DUR=t1-t0+pre+.5;TITLE=SONG.name+' · '+fmtT(SONG.t0)+'–'+fmtT(t1);showMeta();layout();
+  const safe=async ids=>{if(!ids.length)return silentURL(t1-t0+pre);try{return await renderTracks(s,ids,t0-pre,t1,true)}catch(e){console.warn('render (blocks) failed',e);
+    try{return await renderTracks(s,ids,t0-pre,t1,false)}catch(e2){console.warn('render failed',e2);return silentURL(t1-t0+pre)}}};
+  const pn=await safe([SONG.solo]),bg=await safe(bIds);
   for(const el of [elB,elP]){el.pause();if(el.src&&el.src.startsWith('blob:'))URL.revokeObjectURL(el.src)}
   elB.src=bg;elP.src=pn;elB.load();elP.load();
-  setNotes(list);DUR=t1-t0+pre+.5;TITLE=SONG.name+' · '+fmtT(t0)+'–'+fmtT(t1);showMeta();layout();
 }
 
 /* ---------- MIDI: Mac bridge -> phone over WebRTC (PeerJS for pairing only) ---------- */
@@ -1185,6 +1193,7 @@ function drawPreview(){
 
 /* ---------- finishing & results ---------- */
 function finish(){
+  setTimeout(applyVol,0);
   document.documentElement.dataset.screen='menu';
   if(G.mode==='watch'){G.ended=true;exitToStart();watchOnly=false;return}
   G.ended=true;G.playing=false;G.on=false;for(const el of [elB,elP])el.pause();fade(1,10);
