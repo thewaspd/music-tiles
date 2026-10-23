@@ -665,6 +665,7 @@ function onBridgeMidi(ev){
     $('#bLast').innerHTML=`Last key: <b>${nn(n).replace('♯','#')}</b> · sent to ${BR.conns.size} phone${BR.conns.size===1?'':'s'}`}
   else if(cmd===0x80||(cmd===0x90&&v===0)){for(const c of BR.conns)try{c.send({t:'off',n})}catch(e){}}
 }
+window.__nkTestKey=n=>onBridgeMidi({data:[0x90,n,100]});
 function closeBridge(){for(const c of BR.conns)try{c.send({t:'bye'})}catch(e){}
   try{BR.peer&&BR.peer.destroy()}catch(e){}BR.conns.clear();$('#bridge').classList.remove('show');$('#start').classList.remove('hide');history.replaceState(null,'',location.pathname)}
 
