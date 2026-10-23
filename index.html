@@ -583,7 +583,7 @@ function connectMidi(){
     conn.on('open',()=>{clearTimeout(fail);MD.ok=true;midiReady();clearInterval(MD.pingT);MD.pingT=setInterval(()=>{try{conn.send({t:'ping',x:performance.now()})}catch(e){}},2000);conn.send({t:'ping',x:performance.now()})});
     conn.on('data',d=>{
       if(!d||typeof d!=='object')return;
-      if(d.t==='on'){MD.q.push(d.n);MD.flash=performance.now()}
+      if(d.t==='on'){MD.flash=performance.now();if(!S.mcal)midiCalibrate(d.n);else if(!G.on){midiStat(`Heard ${nn(d.n-(S.mshift|0)).replace('♯','#')} · ${Math.round(MD.rtt/2)} ms`,'ok')}else MD.q.push(d.n)}
       else if(d.t==='pong'){const r=performance.now()-d.x;MD.rtt=MD.rtt*.7+r*.3}
       else if(d.t==='bye'){MD.ok=false;midiStat('The Mac closed the bridge','bad')}
     });
@@ -608,16 +608,15 @@ function midiReady(){
   if(!S.mcal)midiStat('Connected · now press middle C','wait');
   else midiStat(`Connected · ${Math.round(MD.rtt/2)} ms`,'ok');
 }
-// drain key presses; the first press after pairing is the middle-C check
+// the first press after pairing is the middle-C check (handled as it arrives, not on the next frame)
+function midiCalibrate(n){
+  if(n%12===0&&Math.abs(n-60)<=24){S.mshift=n-60;S.mcal=true;persist();midiStat(`Ready · middle C is key ${n}${S.mshift?' (transpose '+(S.mshift>0?'+':'')+S.mshift+' applied)':''}`,'ok');syncUI()}
+  else midiStat(`That was ${nn(n).replace('♯','#')}. Press middle C`,'bad');
+}
+// drain key presses for the game
 function drainMidi(){
   if(!MD.q.length)return[];
   const ns=MD.q.splice(0);
-  if(!S.mcal&&MD.ok){
-    const n=ns[0];
-    if(n%12===0&&Math.abs(n-60)<=24){S.mshift=n-60;S.mcal=true;persist();midiStat(`Ready · middle C is key ${n}${S.mshift?' (transpose '+(S.mshift>0?'+':'')+S.mshift+' applied)':''}`,'ok');syncUI()}
-    else midiStat(`That was ${nn(n).replace('♯','#')}. Press middle C`,'bad');
-    return[];
-  }
   return ns.map(n=>n-(S.mshift|0));
 }
 
@@ -774,7 +773,6 @@ function frame(now){
   else if(G.on||!$('#start').classList.contains('hide'))ons=analyse(now,G.on&&biasOK(now)?expectedNow():null).map(o=>o.m);
   if(G.on){if(G.playing&&!paused)step(dt,now,ons);advanceVis(dt)}
   else if(ons.length&&S.out!=='midi')showHeard(ons);
-  else if(ons.length&&S.mcal)midiStat(`Heard ${nn(ons[0]+(S.mshift|0)-(S.mshift|0)).replace('♯','#')} · ${Math.round(MD.rtt/2)} ms`,'ok');
   if(G.on)render(now);else renderIdle(now);
   $('#btnPause').style.setProperty('--lv',S.out==='midi'?Math.max(0,1-(now-MD.flash)/250).toFixed(2):Math.min(1,level*14).toFixed(2));
   if(!G.on)$('#lv').style.width=Math.min(100,level*900)+'%';
