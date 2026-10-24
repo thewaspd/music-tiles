@@ -167,12 +167,15 @@ input[type=range]::-moz-range-thumb{width:22px;height:22px;border:0;border-radiu
 .blast{margin-top:12px;padding:10px 12px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid var(--line);font-size:15px;color:var(--muted)}
 .blast b{color:var(--ink);font-size:20px}
 /* song sheet */
-.sheetpanel{width:min(760px,100%)}
-.shgrid{display:grid;grid-template-columns:1fr 210px;gap:16px;margin-top:10px}
+.sheetpanel{width:min(920px,100%)}
+.shgrid{display:grid;grid-template-columns:1fr 190px;gap:16px;margin-top:10px}
 .trks{display:flex;flex-direction:column;gap:6px;max-height:min(52vh,330px);overflow:auto;touch-action:pan-y;padding-right:4px}
 .trk{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:12px;background:rgba(255,255,255,.04);border:1px solid var(--line)}
 .trk.solo{border-color:var(--gold);background:rgba(255,198,92,.08)}
-.trk .tn{flex:1;min-width:0}.trk .tn b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.trk .tn span{font-size:11.5px;color:var(--muted)}
+.trk .tn{flex:0 0 118px;min-width:0}
+.roll{flex:1;min-width:60px;height:34px;border-radius:7px;touch-action:none;cursor:pointer}
+.pv{width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.08);border:1px solid var(--line);font-size:12px;flex:none}
+@media (orientation:portrait){.trk{flex-wrap:wrap}.roll{order:5;flex:1 0 100%;height:30px}}.trk .tn b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.trk .tn span{display:block;font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pick{font-size:20px;color:var(--gold);width:28px}
 .tg{font-size:11px;color:var(--gold);text-transform:uppercase;letter-spacing:.1em}
 .shside{display:flex;flex-direction:column;gap:8px}
@@ -771,10 +774,40 @@ function drawSheet(){
     const tag=solo?'You play this':t.drums?'Drums':t.loop>.6&&!t.drums?'Looping part':fam(t);
     return `<div class="trk${solo?' solo':''}"><button class="pick" data-solo="${i}" aria-pressed="${solo}" title="Make this the part you play">${solo?'★':'☆'}</button>
       <div class="tn"><b>${(t.name||'Track '+(i+1)).replace(/</g,'')}</b><span>${tag} · ${t.notes.length} notes</span></div>
+      <canvas class="roll" data-roll="${i}" title="Tap or drag to listen from here"></canvas>
+      <button class="pv" data-pv="${i}" aria-label="Play this track alone">${PV.i===i?'■':'▶'}</button>
       ${solo?'<span class="tg">guide</span>':`<button class="switch" data-mute="${i}" aria-pressed="${on}" title="Include in backing"></button>`}</div>`}).join('');
+  requestAnimationFrame(()=>document.querySelectorAll('.roll').forEach(c=>drawRoll(+c.dataset.roll)));
   $('#shFrom').value=fmtT(SONG.t0);$('#shTo').value=fmtT(SONG.t1);$('#shLen').textContent='Song length '+fmtT(s.dur);
 }
-async function useSheet(){
+/* ---- per-track roll + isolated preview ---- */
+const PV={i:-1,pos:0,ac0:0,cur:0,timer:null,bus:null,raf:0};
+function drawRoll(i){
+  const c=document.querySelector(`.roll[data-roll="${i}"]`);if(!c)return;const r=c.getBoundingClientRect();if(!r.width)return;
+  const d=Math.min(2,devicePixelRatio||1);if(c.width!==Math.round(r.width*d)){c.width=r.width*d;c.height=r.height*d}
+  const x=c.getContext('2d');x.setTransform(d,0,0,d,0,0);const w=r.width,h=r.height,s=SONG.song,tr=s.tracks[i],D=s.dur;
+  x.clearRect(0,0,w,h);x.fillStyle='rgba(255,255,255,.04)';x.fillRect(0,0,w,h);
+  const a=SONG.t0/D*w,b=parseT($('#shTo').value||fmtT(SONG.t1))/D*w;x.fillStyle='rgba(255,198,92,.10)';x.fillRect(a,0,Math.max(1,b-a),h);
+  const lo2=tr.lo,sp=Math.max(6,tr.hi-tr.lo+1),solo=i===SONG.solo,off=SONG.off.has(i);
+  x.fillStyle=solo?'rgba(255,198,92,.95)':off?'rgba(140,140,170,.35)':'rgba(91,168,255,.85)';
+  for(const n of tr.notes){const nx=n.t/D*w,ny=h-3-((n.n-lo2+.5)/sp)*(h-6);x.fillRect(nx,ny-1,Math.max(1.5,n.d/D*w),2)}
+  if(PV.i===i){const px=PV.cur/D*w;x.fillStyle='#fff';x.fillRect(px-1,0,2,h)}
+}
+function stopPreview(){clearInterval(PV.timer);cancelAnimationFrame(PV.raf);if(PV.bus){try{PV.bus.gain.setTargetAtTime(0,AC.currentTime,.03);const b=PV.bus;setTimeout(()=>b.disconnect(),300)}catch(e){}}
+  const old=PV.i;PV.i=-1;PV.bus=null;const btn=document.querySelector(`.pv[data-pv="${old}"]`);if(btn)btn.textContent='▶';if(old>=0)drawRoll(old)}
+function playPreview(i,pos){
+  initAudio();stopPreview();const tr=SONG.song.tracks[i],k=fam(tr);
+  PV.i=i;PV.pos=pos;PV.cur=pos;PV.ac0=AC.currentTime+.08;PV.bus=AC.createGain();PV.bus.gain.value=.9;PV.bus.connect(AC.destination);NOISE=null;
+  const btn=document.querySelector(`.pv[data-pv="${i}"]`);if(btn)btn.textContent='■';
+  const ns=tr.notes.filter(n=>n.t>=pos).sort((a,b)=>a.t-b.t);let j=0;
+  const sched=()=>{const until=AC.currentTime-PV.ac0+pos+.6;
+    while(j<ns.length&&ns[j].t<until){const n=ns[j++],t=PV.ac0+(n.t-pos),v=n.v/127;
+      if(tr.drums)drum(AC,PV.bus,n.n,t,v);else synthNote(AC,PV.bus,440*Math.pow(2,(n.n-69)/12),t,Math.min(n.d,4),v,k)}
+    if(j>=ns.length&&AC.currentTime-PV.ac0+pos>(ns.length?ns[ns.length-1].t+2:pos))stopPreview()};
+  sched();PV.timer=setInterval(sched,120);
+  const tick=()=>{if(PV.i!==i)return;PV.cur=AC.currentTime-PV.ac0+pos;drawRoll(i);PV.raf=requestAnimationFrame(tick)};tick();
+}
+async function useSheet(){stopPreview();
   const s=SONG.song;SONG.t0=Math.max(0,parseT($('#shFrom').value));SONG.t1=Math.min(s.dur,Math.max(SONG.t0+5,parseT($('#shTo').value)));
   const btn=$('#shGo');btn.disabled=true;btn.textContent='Preparing audio…';
   try{await applySong();saved.lastSong={midi:SONG.midi,name:SONG.name,solo:SONG.solo,off:[...SONG.off],t0:SONG.t0,t1:SONG.t1};try{localStorage.setItem(KEY,JSON.stringify(saved))}catch(e){}
@@ -1527,7 +1560,15 @@ $('#shTracks').addEventListener('click',e=>{const a=e.target.closest('[data-solo
   if(a){SONG.solo=+a.dataset.solo;SONG.off.delete(SONG.solo);drawSheet()}
   if(b){const i=+b.dataset.mute;SONG.off.has(i)?SONG.off.delete(i):SONG.off.add(i);drawSheet()}});
 $('#shGo').addEventListener('click',()=>{initAudio();useSheet().then(()=>$('#btnSheet').hidden=false)});
-$('#shCancel').addEventListener('click',()=>$('#sheet').classList.remove('show'));
+$('#shCancel').addEventListener('click',()=>{stopPreview();$('#sheet').classList.remove('show')});
+$('#shTracks').addEventListener('click',e=>{const b=e.target.closest('[data-pv]');if(!b)return;const i=+b.dataset.pv;
+  if(PV.i===i)stopPreview();else{const t=SONG.t0;playPreview(i,t)}});
+{let drag=null;const posOf=(c,e)=>{const r=c.getBoundingClientRect();return clamp((e.clientX-r.left)/r.width,0,1)*SONG.song.dur};
+ $('#shTracks').addEventListener('pointerdown',e=>{const c=e.target.closest('.roll');if(!c)return;e.preventDefault();drag={c,i:+c.dataset.roll};c.setPointerCapture(e.pointerId);
+   stopPreview();PV.i=drag.i;PV.cur=posOf(c,e);drawRoll(drag.i)});
+ $('#shTracks').addEventListener('pointermove',e=>{if(!drag)return;PV.cur=posOf(drag.c,e);drawRoll(drag.i)});
+ $('#shTracks').addEventListener('pointerup',e=>{if(!drag)return;const {c,i}=drag;drag=null;PV.i=-1;playPreview(i,posOf(c,e))});
+ for(const id of ['#shFrom','#shTo'])$(id).addEventListener('input',()=>document.querySelectorAll('.roll').forEach(c=>drawRoll(+c.dataset.roll)));}
 // bridge: send a MIDI file to connected phones
 async function sendMidiFile(f){const b64=bufToB64(await f.arrayBuffer());let k=0;for(const c of BR.conns)try{c.send({t:'midi',name:f.name,b64});k++}catch(e){}
   $('#bLast').innerHTML=k?`Sent <b>${f.name.replace(/</g,'')}</b> to the phone`:'No phone connected yet. Pair the phone first.'}
