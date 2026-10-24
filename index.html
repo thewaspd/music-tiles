@@ -998,21 +998,24 @@ function makeLines(){
 }
 function makePlan(L){
   const P=[];
-  L.forEach((_,i)=>{P.push({k:'keys',a:i,b:i,rate:.75});P.push({k:'tempo',a:i,b:i,rate:.7});
+  // phase 1: keys only, line by line, with regular run-throughs from the top
+  L.forEach((_,i)=>{P.push({k:'keys',a:i,b:i,rate:.75});
     if(i>0&&(i%2===1||i===L.length-1))P.push({k:'top',a:0,b:i,rate:.75})});
+  // phase 2: timing, in pairs of lines at 70%, then the whole section at 85% and 100%
+  for(let i=0;i<L.length;i+=2)P.push({k:'tempo',a:i,b:Math.min(L.length-1,i+1),rate:.7});
   P.push({k:'full',a:0,b:L.length-1,rate:.85});P.push({k:'full',a:0,b:L.length-1,rate:1});
   return P;
 }
-const CO={lines:[],plan:[],prog:null,fing:new Map()};
+const CO={lines:[],plan:[],prog:null,fing:new Map()};const PLANV=2;
 function loadCoach(){
   CO.lines=makeLines();CO.plan=makePlan(CO.lines);
   let pr=null;try{pr=JSON.parse(localStorage.getItem(songId()))}catch(e){}
-  CO.prog=pr&&pr.v===1&&pr.n===CO.plan.length?pr:{v:1,n:CO.plan.length,step:0,xp:0,stars:{},best:{},runs:0};
+  CO.prog=pr&&pr.v===PLANV&&pr.n===CO.plan.length?pr:{v:PLANV,n:CO.plan.length,step:0,xp:0,stars:{},best:{},runs:0};
   CO.fing=fingering(NOTES.filter(n=>S.part==='full'||n.mel));
   coachMenu();
 }
 function saveProg(){try{localStorage.setItem(songId(),JSON.stringify(CO.prog))}catch(e){}}
-function stepLabel(st){const L=CO.lines.length;return st.k==='keys'||st.k==='tempo'?`Line ${st.a+1}/${L} · ${STEP_NAMES[st.k]}${st.k==='tempo'?' '+Math.round(st.rate*100)+'%':''}`:st.k==='top'?`From the top · lines 1–${st.b+1}`:`Full section · ${Math.round(st.rate*100)}%`}
+function stepLabel(st){const L=CO.lines.length;return st.k==='tempo'?`Timing · lines ${st.a+1}–${st.b+1} · ${Math.round(st.rate*100)}%`:st.k==='keys'?`Line ${st.a+1}/${L} · Keys`:st.k==='top'?`From the top · lines 1–${st.b+1}`:`Full section · ${Math.round(st.rate*100)}%`}
 function goal(st){return st.k==='keys'||st.k==='top'?{acc:.9}:{acc:.9,time:.75}}
 function coachMenu(){
   if(!CO.plan.length)return;const p=CO.prog,st=CO.plan[Math.min(p.step,CO.plan.length-1)],done=p.step>=CO.plan.length;
@@ -1023,7 +1026,7 @@ function startStep(i){
   CO.prog.step=clamp(i,0,CO.plan.length-1);saveProg();const st=CO.plan[CO.prog.step];
   G.coach={st,rate:st.rate,t:performance.now()};
   G.range=[CO.lines[st.a].a,CO.lines[st.b].end];
-  G.mode=st.k==='tempo'||st.k==='full'?'perform':'learn';
+  G.mode='learn';G.coach.timed=st.k==='tempo'||st.k==='full';G.coach.offs=[];
   resetGame();applyVol();layout();
   $('#coachHud').textContent=stepLabel(st);$('#coachCard').classList.remove('show');
   paused=false;G.on=true;G.playing=true;lastNow=performance.now();
@@ -1037,7 +1040,9 @@ function coachDone(){
   const c=G.coach;if(!c||G.ended)return;G.ended=true;G.playing=false;for(const el of [elB,elP])el.pause();
   if(c.demo){G.coach=null;startStep(CO.prog.step);return}
   const st=c.st,gs=G.groups,tot=G.req.length||1,go=goal(st);let acc,time=null,msg;
-  if(G.mode==='learn'){acc=gs.filter(g=>!g.wrong).length/Math.max(1,gs.length);
+  if(c.timed){acc=gs.filter(g=>!g.wrong).length/Math.max(1,gs.length);const os=c.offs;time=os.length?os.filter(o=>Math.abs(o)<=.15*c.rate+.03).length/os.length:0;
+    const late=os.length?os.reduce((a,b)=>a+b,0)/os.length:0;msg=`${Math.round(acc*100)}% keys · ${Math.round(time*100)}% on time${Math.abs(late)>.06?` · mostly ${late>0?'late':'early'}`:''}`}
+  else if(G.mode==='learn'){acc=gs.filter(g=>!g.wrong).length/Math.max(1,gs.length);
     const early=G.req.filter(n=>n.early>.25).length;msg=`${Math.round(acc*100)}% right first time${early?` · ${early} played early`:''}`}
   else{acc=G.hits/tot;const hs=G.offs.filter(o=>o[1]!==null);time=hs.length?hs.filter(o=>Math.abs(o[1])<=.15*c.rate+.05).length/hs.length:0;
     msg=`${Math.round(acc*100)}% keys · ${Math.round(time*100)}% on time`}
@@ -1053,10 +1058,10 @@ function coachDone(){
   $('#ccStars').innerHTML=[0,1,2].map(i=>`<i class="${i<stars?'on':''}">★</i>`).join('');
   $('#ccMsg').textContent=msg+` · goal ${Math.round(go.acc*100)}%${go.time?' keys + '+Math.round(go.time*100)+'% on time':''}`;
   $('#ccXp').textContent=`+${gain} XP`;
-  $('#ccNext').textContent=p.step>=CO.plan.length?'Lesson complete! Play the whole section in Perform mode.':pass?'Next: '+stepLabel(next):'Again in a moment…';
+  $('#ccNext').textContent=p.step>=CO.plan.length?'Lesson complete! Play the whole section in Perform mode.':pass?'Next: '+stepLabel(next):'Press Play or Again when ready';
   $('#coachCard').classList.add('show');$('#coachHud').textContent=stepLabel(st);
   clearTimeout(CO.auto);
-  if(p.step<CO.plan.length)CO.auto=setTimeout(()=>{if($('#coachCard').classList.contains('show')&&!paused)startStep(p.step)},pass?2600:2200);
+  if(pass&&p.step<CO.plan.length)CO.auto=setTimeout(()=>{if($('#coachCard').classList.contains('show')&&!paused)startStep(p.step)},2600);
   void wasStep;
 }
 // line navigation (hardware buttons): move to the keys step of another line
@@ -1212,7 +1217,7 @@ function step(dt,now,ons){
   if(window.__autoMidi&&G.T>0){ // simulated player on a MIDI keyboard: ~40 ms human scatter, presses each note once
     for(let i=G.gi;i<Math.min(G.req.length,G.gi+12);i++){const n=G.req[i];if(n.sent)continue;
       if(n.jit===undefined)n.jit=(Math.random()-.4)*.08;
-      if(G.mode==='learn'?(G.waiting&&G.waiting.notes.includes(n)&&now-G.waitStart>120):G.T>=n.t+n.jit){n.sent=true;MD.q.push(n.m)}}
+      if(G.mode==='learn'&&!(G.coach&&G.coach.timed)?(G.waiting&&G.waiting.notes.includes(n)&&now-G.waitStart>120):G.T>=n.t+n.jit){n.sent=true;MD.q.push(n.m)}}
   }
   // advance time
   if(G.T<G.start){G.T+=dt*G.rate;if(G.T>=G.start){G.T=G.start;audioPlay();if(window.__pl)window.__pl.play()}}
@@ -1270,11 +1275,11 @@ function learnStep(now,ons,lat){
   if(!g)return;
   const exp=new Set(g.notes.filter(n=>!n.state).map(n=>n.m));
   // accept the note you owe (a little early is fine), never anything else
-  const early=G.coach?2.5:S.out==='speaker'?.25:.6;
+  const early=G.coach?(G.coach.timed?.4:2.5):S.out==='speaker'?.25:.6;
   if(ons.length&&G.T>=g.t-early*Math.max(.6,G.rate)){
     for(const m of ons){
       const n=g.notes.find(n=>n.m===m&&!n.state);
-      if(n){n.state='hit';n.hitT=now;n.early=Math.max(0,g.t-G.T);keyFx(m,'hit',now);burst(m,14,'75,227,138');}
+      if(n){n.state='hit';n.hitT=now;n.early=Math.max(0,g.t-G.T);if(G.coach&&G.coach.timed&&n===g.notes[0])G.coach.offs.push(G.waiting?(G.coach.stopAt-g.t)+(now-G.waitStart)/1000*G.rate:G.T-g.t);keyFx(m,'hit',now);burst(m,14,'75,227,138');}
       else if((S.out==='midi'||!harmonicTwin(m,exp))&&!g.notes.some(x=>x.m===m)&&(S.out==='midi'||biasOK(now))){G.wrong++;g.wrong=(g.wrong||0)+1;keyFx(m,'wrong',now)}
     }
     const need=g.notes.length===1?1:Math.max(1,Math.ceil(g.notes.length*.6));
@@ -1283,7 +1288,7 @@ function learnStep(now,ons,lat){
   const g2=G.groups[G.gi];
   // Stop and wait. Through the phone speaker the music stops just BEFORE the recorded note, so the
   // mic can't hear the recording play it for you; on headphones it allows for the mic's delay.
-  if(g2&&!G.waiting){const stopAt=S.out==='speaker'?g2.t-.035:g2.t+lat*G.rate+.04;
+  if(g2&&!G.waiting){const stopAt=G.coach&&G.coach.timed?g2.t+.3*G.rate:S.out==='speaker'?g2.t-.035:g2.t+lat*G.rate+.04;if(G.coach)G.coach.stopAt=stopAt;
     if(G.T>=stopAt){G.waiting=g2;G.T=Math.max(G.T,stopAt);G.waitStart=now;audioPause()}}
   updatePrompt(now);
 }
@@ -1586,7 +1591,7 @@ if(SELFTEST)window.__dbg=(m)=>({dev:pitchDev(m,sE[m]),sal:sal[m],floor:floorDb[m
 window.__ONS=[];if(SELFTEST){S.shift=0;S.cents=0;S.abs=16;S.out='phones';S.tuned=true}
 if(SELFTEST&&location.hash.indexOf('midi')>=0){S.out='midi';S.mcal=true;S.mshift=0;MD.ok=true;window.__autoMidi=true;syncUI()}
 if(SELFTEST&&location.hash.indexOf('auto')>=0){S.mode=location.hash.indexOf('learn')>=0?'learn':'perform';const neg=location.hash.indexOf('neg')>=0;S.volB=neg?1:0;S.volP=neg?0:1;if(neg)S.out='speaker';if(location.hash.indexOf('echo')>=0){S.out='speaker';S.volB=1;S.volP=1}
-  window.__vis=()=>visTime();S.lat=0;syncUI();window.__G=G;window.__start=startGame;window.__finish=finish}
+  window.__vis=()=>visTime();window.__coach=()=>CO;window.__step=i=>startStep(i);S.lat=0;syncUI();window.__G=G;window.__start=startGame;window.__finish=finish}
 })();
 </script>
 </body>
